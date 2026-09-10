@@ -1,5 +1,12 @@
 # codexbar-plasmoid
 
+Personal fork of [slopfire/codexbar-plasmoid](https://github.com/slopfire/codexbar-plasmoid).
+This fork retains the package ID so it upgrades the existing widget in place.
+It adds incomplete-history reporting, manual CLI scan refresh, and clearer quota/cost labels.
+
+Keep all widget instances on the same CodexBar CLI version: different parser versions
+share a local scan database and can repeatedly invalidate each other’s history cache.
+
 ![CodexBar Plasmoid Screenshot](assets/screenshot.png)
 
 This repository provides a Plasma 6 widget for the [CodexBar](https://github.com/steipete/CodexBar) CLI.
