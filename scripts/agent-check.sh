@@ -157,6 +157,7 @@ if [[ "$use_mock" -eq 1 ]] && command -v node >/dev/null 2>&1; then
               if(!Array.isArray(j.entries) || j.entries.length<1) process.exit(3);
               const codex = j.entries.find(e=>e.provider === "codex");
               if(codex?.tokenUsage?.provenance !== "listPriceEstimate") process.exit(5);
+              if(codex?.tokenUsage?.historyCoverageIsEstablished !== false) process.exit(6);
               console.log(j.entries.map(e=>e.provider).join(","));
             } catch { process.exit(4); }
           });

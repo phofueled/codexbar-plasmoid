@@ -584,6 +584,10 @@ function fetchCostWithCommand(command, providerId, backend) {
     "--provider",
     providerId,
   ];
+  // A manual refresh must bypass both our shared cache and the CLI scan debounce.
+  if (forceRefresh && backend === "codexbar") {
+    commandArgs.push("--refresh");
+  }
   try {
     const payload = sharedFetch("cost", {
       command,
@@ -1035,6 +1039,8 @@ function buildTokenUsage(cost, usage) {
         last30DaysCostUSD,
         last30DaysTokens,
         provenance: clean(cost.provenance || cost.totals?.provenance) || null,
+        historyCoverageIsEstablished: typeof cost.historyCoverageIsEstablished === "boolean"
+          ? cost.historyCoverageIsEstablished : null,
         currencyCode: cost.currencyCode || "USD",
         sessionLabel: cost.sessionLabel || "Today",
         last30DaysLabel: cost.last30DaysLabel || "30d",
