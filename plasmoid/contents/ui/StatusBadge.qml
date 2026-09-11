@@ -10,6 +10,11 @@ RowLayout {
     readonly property string indicator: status && status.indicator ? status.indicator : ""
     visible: indicator.length > 0
     spacing: Kirigami.Units.smallSpacing / 2
+    PlasmaComponents3.ToolTip.visible: statusHover.hovered
+    PlasmaComponents3.ToolTip.text: (status && status.description ? status.description + "\n" : "")
+        + i18n("Provider-wide status; this may affect other products or regions. It does not necessarily indicate a Codex issue.")
+    HoverHandler { id: statusHover }
+
 
     Rectangle {
         Layout.preferredWidth: Kirigami.Units.smallSpacing
@@ -32,14 +37,11 @@ RowLayout {
         if (!status) {
             return "";
         }
-        if (status.description) {
-            return status.description;
-        }
         switch (indicator) {
         case "none":
             return i18n("Operational");
         case "minor":
-            return i18n("Partial outage");
+            return i18n("Service disruption");
         case "major":
             return i18n("Major outage");
         case "critical":

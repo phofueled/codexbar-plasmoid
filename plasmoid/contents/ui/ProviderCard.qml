@@ -1,3 +1,4 @@
+import "LocalFormatting.js" as LocalFormatting
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls as QtControls
@@ -7,6 +8,7 @@ import org.kde.plasma.components 3.0 as PlasmaComponents3
 PlasmaComponents3.Frame {
     id: card
 
+    property real cadRate: 1.3822
     property var entry
     property string providerName: ""
     property url providerSiteUrl: ""
@@ -237,6 +239,7 @@ PlasmaComponents3.Frame {
                 Layout.fillWidth: true
                 visible: card.entry && card.entry.tokenUsage
                 title: card.entry && card.entry.tokenUsage ? card.entry.tokenUsage.sessionLabel : i18n("Today")
+                Layout.columnSpan: parent.columns
                 value: costAndTokens("session")
             }
 
@@ -244,6 +247,7 @@ PlasmaComponents3.Frame {
                 Layout.fillWidth: true
                 visible: card.entry && card.entry.tokenUsage
                 title: card.entry && card.entry.tokenUsage ? card.entry.tokenUsage.last30DaysLabel : i18n("30d")
+                Layout.columnSpan: parent.columns
                 value: costAndTokens("last30")
             }
         }
@@ -258,22 +262,12 @@ PlasmaComponents3.Frame {
             wrapMode: Text.WordWrap
         }
 
-        PlasmaComponents3.Label {
-            Layout.fillWidth: true
-            visible: !!(card.entry && card.entry.tokenUsage
-                && card.entry.tokenUsage.provenance === "listPriceEstimate")
-            text: i18n("Costs are list-price estimates, not billed charges.")
-            color: Kirigami.Theme.disabledTextColor
-            font: Kirigami.Theme.smallFont
-            wrapMode: Text.WordWrap
-        }
-
         Loader {
             id: historyLoader
 
             Layout.fillWidth: true
             // Collapse fully when inactive so content height tracks real cards.
-            Layout.preferredHeight: active ? Kirigami.Units.gridUnit * 3.5 : 0
+            Layout.preferredHeight: active ? Kirigami.Units.gridUnit * 5 : 0
             active: !card.isErrorOnly
                 && card.showHistory
                 && card.entry
@@ -283,6 +277,7 @@ PlasmaComponents3.Frame {
 
             sourceComponent: Component {
                 HistoryChart {
+                    cadRate: card.cadRate
                     points: card.entry && card.entry.dailyUsage ? card.entry.dailyUsage : []
                     accentColor: card.accentColor
                 }
@@ -357,17 +352,12 @@ PlasmaComponents3.Frame {
     }
 
     function money(value, code) {
-        if (!Number.isFinite(Number(value))) {
-            return "—";
-        }
-        return (code || "USD") + " " + Number(value).toLocaleString(Qt.locale(), "f", 2);
+        return LocalFormatting.money(value, code, Qt.locale(), card.cadRate);
     }
 
     function tokenText(value) {
-        if (!Number.isFinite(Number(value))) {
-            return "";
-        }
-        return Math.round(Number(value)).toLocaleString(Qt.locale(), "f", 0) + " " + i18n("tokens");
+        const count = LocalFormatting.tokens(value, Qt.locale());
+        return count ? count + " " + i18n("tokens") : "";
     }
 
     function hasUsageRows() {
@@ -375,7 +365,7 @@ PlasmaComponents3.Frame {
     }
 
     function showBalanceSummary() {
-        return !!(entry && !hasUsageRows() && (entry.creditsRemaining !== null || entry.tokenUsage));
+        return !!(entry && entry.provider !== "codex" && !hasUsageRows() && (entry.creditsRemaining !== null || entry.tokenUsage));
     }
 
     function primarySummaryLabel() {

@@ -146,7 +146,7 @@ const CODEXBAR_COST_PROVIDERS = new Set(["codex", "claude"]);
 const NATIVE_COST_PROVIDERS = new Set(["opencode", "opencodego", "cursor", "grok"]);
 
 const linuxAutoFallbacks = {
-  codex: "cli",
+  codex: "oauth", // Direct limits endpoint avoids intermittent local app-server RPC timeouts.
   claude: "cli",
   cursor: "native",
   opencode: "native",
@@ -861,8 +861,11 @@ function normalizeSnapshot(usagePayload, costPayload, costError = null) {
     if (!successProviders.has(providerId)) {
       const index = filteredEntries.findIndex((entry) => entry.provider === providerId && entry.error);
       if (index >= 0) {
-        filteredEntries[index] = normalizeProvider({ provider: providerId, source: "local" }, cost);
-        successProviders.add(providerId);
+        // Preserve the failure and source; local cost is not subscription usage.
+        const failed = filteredEntries[index];
+        const fallback = normalizeProvider({ provider: providerId, source: failed.source }, cost);
+        fallback.error = failed.error;
+        filteredEntries[index] = fallback;
       }
     }
   }

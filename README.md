@@ -356,3 +356,17 @@ or full `app.devin.ai/org/<slug>` URL; it can also come from `DEVIN_ORGANIZATION
 
 Successful Antigravity native fetches are cached under the user cache directory. If Antigravity is not running later, the
 widget shows the last fetched Antigravity usage with a status note instead of replacing it with an error-only card.
+
+### Personal display customizations
+
+This fork displays USD cost estimates converted to CAD. The Bank of Canada
+USD/CAD daily rate is cached locally and checked every five minutes; it is
+fetched at most once per successful calendar day, only while an external power
+supply reports online. On battery or a failed fetch, the last cached rate is
+retained (initial fallback: 1.3822 CAD/USD, September 10, 2026). Requires Python 3.
+Costs remain estimates, not subscription charges.
+
+The history chart uses tokens consistently, with date labels and million-token
+abbreviations. Popup height follows its content. Linux Codex Auto uses OAuth to
+avoid intermittent local app-server RPC timeouts. Failed limit requests retain
+an error rather than silently changing the panel to a dollar estimate.

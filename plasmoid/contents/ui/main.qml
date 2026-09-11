@@ -11,6 +11,27 @@ import org.kde.plasma.plasmoid
 PlasmoidItem {
     id: root
 
+    property real cadRate: 1.3822
+    Plasma5Support.DataSource {
+        id: cadRateSource
+        engine: "executable"
+        connectedSources: []
+        onNewData: function(sourceName, data) {
+            disconnectSource(sourceName);
+            try {
+                const result = JSON.parse(String(data.stdout || ""));
+                if (Number.isFinite(result.rate) && result.rate > 0) root.cadRate = result.rate;
+            } catch (error) {}
+        }
+    }
+    Timer {
+        interval: 300000
+        running: true
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: cadRateSource.connectSource("python3 " + codexBar.quote(codexBar.localPath(Qt.resolvedUrl("../code/cad-rate.py"))))
+    }
+
     property var snapshot: ({ ok: false, entries: [] })
     property var lastSuccessfulEntries: []
     property var cliUpdateInfo: ({ ok: true, installedVersion: "", latestVersion: "", needsUpdate: false, updated: false, error: "" })
@@ -453,6 +474,7 @@ PlasmoidItem {
             if (lowest !== null) {
                 return percent(lowest);
             }
+            if (entry.provider === "codex" && ["lowest", "session", "weekly"].indexOf(metric) >= 0) return "—";
             if (entry.creditsRemaining !== null) {
                 return Number(entry.creditsRemaining).toLocaleString(Qt.locale(), "f", 1);
             }
@@ -585,6 +607,10 @@ PlasmoidItem {
                     });
                 }
             }
+            if (output.length === 0 && entry && entry.provider === "codex") {
+                output.push({kind: "credits", title: "Limits unavailable", valueText: "—", color: Kirigami.Theme.disabledTextColor});
+                return output;
+            }
             if (output.length === 0 && entry && (entry.creditsRemaining !== null || entry.tokenUsage)) {
                 output.push({
                     kind: "credits",
@@ -663,7 +689,9 @@ PlasmoidItem {
             // is safe only when it identifies one remembered account.
             const providerMatches = root.lastSuccessfulEntries.filter(function(candidate) {
                 return candidate && candidate.provider === entry.provider
-                    && (!entry.source || candidate.source === entry.source);
+                    && (!entry.source || candidate.source === entry.source
+                        || (entry.provider === "codex" && ["cli", "codex-cli"].indexOf(entry.source) >= 0
+                            && ["cli", "codex-cli"].indexOf(candidate.source) >= 0));
             });
             return providerMatches.length === 1 ? providerMatches[0] : null;
         }
@@ -1392,14 +1420,12 @@ PlasmoidItem {
     fullRepresentation: PlasmaExtras.Representation {
         id: representation
 
-        // Panel popups are sized by PlasmaCore.AppletPopup from these Layout
-        // hints. Leave maximumWidth/Height unset so the popup stays freely
-        // resizable (edges drag; size remembered as popupWidth/popupHeight).
-        // A hard maximumHeight previously blocked growing past ~32 grid units.
+        // Size from all visible rows, including the full provider list.
+        // The minimum prevents a remembered popup size from clipping content.
         Layout.minimumWidth: Kirigami.Units.gridUnit * 18
-        Layout.minimumHeight: Kirigami.Units.gridUnit * 12
+        Layout.minimumHeight: Math.ceil(expandedContent.implicitHeight + Kirigami.Units.smallSpacing * 2)
         Layout.preferredWidth: Kirigami.Units.gridUnit * 24
-        Layout.preferredHeight: Kirigami.Units.gridUnit * 28
+        Layout.preferredHeight: Layout.minimumHeight
         Layout.fillWidth: true
         Layout.fillHeight: true
         collapseMarginsHint: true
@@ -1508,10 +1534,10 @@ PlasmoidItem {
                     : 0
 
                 Layout.fillWidth: true
-                // Fill whatever height the user gave the popup; do not cap the
-                // list — that left empty chrome and blocked taller resizes.
-                Layout.fillHeight: true
-                Layout.minimumHeight: providerEntryModel.count > 0 ? Kirigami.Units.gridUnit : 0
+                // Reserve the complete list height so the enclosing popup fits it.
+                Layout.fillHeight: false
+                Layout.preferredHeight: Math.ceil(contentHeight)
+                Layout.minimumHeight: Math.ceil(contentHeight)
                 visible: providerEntryModel.count > 0
                 clip: true
                 spacing: Kirigami.Units.smallSpacing
@@ -1550,6 +1576,7 @@ PlasmoidItem {
                     )
                     x: Kirigami.Units.smallSpacing
 
+                    cadRate: root.cadRate
                     entry: providerCard.entryData
                     providerName: codexBar.providerName(
                         providerCard.entryData ? providerCard.entryData.provider : providerCard.provider

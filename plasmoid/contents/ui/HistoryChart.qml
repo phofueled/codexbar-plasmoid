@@ -1,3 +1,4 @@
+import "LocalFormatting.js" as LocalFormatting
 import QtQuick
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
@@ -6,14 +7,11 @@ import org.kde.plasma.components 3.0 as PlasmaComponents3
 Item {
     id: chart
 
+    property real cadRate: 1.3822
     property var points: []
     property color accentColor: Kirigami.Theme.highlightColor
 
     readonly property var values: (points || []).map(function(point) {
-        const cost = Number(point && point.costUSD);
-        if (Number.isFinite(cost) && cost > 0) {
-            return cost;
-        }
         const tokens = Number(point && point.totalTokens);
         return Number.isFinite(tokens) && tokens > 0 ? tokens : 0;
     })
@@ -27,9 +25,28 @@ Item {
         return max;
     }
 
+    PlasmaComponents3.Label {
+        id: chartTitle
+        anchors.top: parent.top
+        text: i18n("Daily tokens")
+        font: Kirigami.Theme.smallFont
+        color: Kirigami.Theme.disabledTextColor
+    }
+    PlasmaComponents3.Label {
+        anchors.top: parent.top
+        anchors.right: parent.right
+        text: i18n("Peak %1", chart.formatTokenCount(chart.maxValue))
+        font: Kirigami.Theme.smallFont
+        color: Kirigami.Theme.disabledTextColor
+    }
     RowLayout {
-        anchors.fill: parent
-        spacing: 2
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: chartTitle.bottom
+        anchors.topMargin: Kirigami.Units.smallSpacing
+        anchors.bottom: chartDates.top
+        anchors.bottomMargin: Kirigami.Units.smallSpacing
+        spacing: 3
 
         Repeater {
             model: chart.points || []
@@ -87,7 +104,7 @@ Item {
                         }
                         return Math.max(2, parent.height * (dayCell.value / chart.maxValue));
                     }
-                    radius: Math.max(1, width / 2)
+                    radius: 2
                     color: chart.accentColor
                     opacity: dayCell.hasUsage ? (dayHover.hovered ? 0.95 : 0.72) : 0.28
                 }
@@ -110,6 +127,28 @@ Item {
         }
     }
 
+    RowLayout {
+        id: chartDates
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        PlasmaComponents3.Label {
+            text: chart.points.length ? chart.shortDate(chart.points[0].dayKey) : ""
+            font: Kirigami.Theme.smallFont
+            color: Kirigami.Theme.disabledTextColor
+        }
+        Item { Layout.fillWidth: true }
+        PlasmaComponents3.Label {
+            text: chart.points.length ? chart.shortDate(chart.points[chart.points.length - 1].dayKey) : ""
+            font: Kirigami.Theme.smallFont
+            color: Kirigami.Theme.disabledTextColor
+        }
+    }
+    function shortDate(key) {
+        const parts = String(key || "").split("-");
+        return parts.length === 3 ? Qt.formatDate(new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])), "MMM d") : "";
+    }
+
     function formatDayTooltip(point) {
         if (!point) {
             return "";
@@ -126,12 +165,12 @@ Item {
         if (hasCost || hasTokens) {
             const parts = [];
             if (hasCost) {
-                parts.push("$" + Number(cost).toLocaleString(Qt.locale(), "f", cost >= 10 ? 2 : 4));
+                parts.push(LocalFormatting.money(cost, "USD", Qt.locale(), chart.cadRate));
             }
             if (hasTokens) {
                 parts.push(formatTokenCount(tokens) + " tokens");
             }
-            lines.push(parts.join(" · "));
+            lines.push(parts.join("\n"));
         } else {
             lines.push(i18n("No usage"));
         }
@@ -146,7 +185,7 @@ Item {
                 const modelTokens = Number(model.totalTokens);
                 const bits = [];
                 if (Number.isFinite(modelCost) && modelCost > 0) {
-                    bits.push("$" + Number(modelCost).toLocaleString(Qt.locale(), "f", modelCost >= 10 ? 2 : 4));
+                    bits.push(LocalFormatting.money(modelCost, "USD", Qt.locale(), chart.cadRate));
                 }
                 if (Number.isFinite(modelTokens) && modelTokens > 0) {
                     bits.push(formatTokenCount(modelTokens));
@@ -189,7 +228,7 @@ Item {
         if (!Number.isFinite(date.getTime())) {
             return String(dayKey);
         }
-        return Qt.formatDate(date, Qt.DefaultLocaleLongDate);
+        return Qt.formatDate(date, "ddd, MMM d, yyyy");
     }
 
     function formatTokenCount(value) {
