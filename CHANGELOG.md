@@ -6,9 +6,9 @@ All notable changes to the CodexBar Plasma widget are documented in this file.
 
 ### Fixes
 
-- Remove the redundant cost disclaimer from the provider card.
+- Remove cost disclaimers and internal local-history notes from the provider card.
 - Synchronize the personal fork with upstream 0.1.11 while retaining the daily-token graph, CAD display, cached quota fallback, and percentage-only tray mode.
-- Preserve previously observed Codex daily quantities outside the scan cache and warn when current logs omit previously observed tokens. Current totals remain the scanner totals.
+- Preserve previously observed Codex daily quantities outside the scan cache and report differences in helper diagnostics. Current totals remain the scanner totals.
 - Reuse hourly cost scans independently of quota refreshes and share manual-refresh results with automatic polling.
 
 ## 0.1.11 — 2026-09-19

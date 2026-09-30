@@ -266,9 +266,8 @@ account's rate-limit percentage.
 
 The graph in this fork shows daily tokens. Quotas refresh every 150 seconds by default; local cost/history scans reuse a shared cache for one hour. Manual refresh bypasses both caches.
 
-Completed Codex scans preserve daily quantities under `$XDG_STATE_HOME/codexbar-plasmoid/cost-history` (normally `~/.local/state/codexbar-plasmoid/cost-history`), scoped to `CODEX_HOME`. If current logs contain fewer tokens than earlier observations within the displayed window, the card warns. Historical observations never inflate current totals: differences can reflect deleted transcripts or parser corrections. Only daily token/cost quantities and observation dates are retained, not transcripts or account credentials.
-When the CLI reports incomplete local history, the card warns that totals may
-omit usage. Manual refresh also passes `--refresh` to the CodexBar cost backend to
+Completed Codex scans preserve daily quantities under `$XDG_STATE_HOME/codexbar-plasmoid/cost-history` (normally `~/.local/state/codexbar-plasmoid/cost-history`), scoped to `CODEX_HOME`. Differences between current logs and earlier observations are available in helper JSON for diagnostics. Historical observations never inflate current totals: differences can reflect deleted transcripts or parser corrections. Only daily token/cost quantities and observation dates are retained, not transcripts or account credentials.
+Manual refresh passes `--refresh` to the CodexBar cost backend to
 bypass its scan debounce, so another bounded scan can continue catching up; native
 backends keep their existing arguments. Local history does not include remote
 usage unless the corresponding logs are present on this computer.
