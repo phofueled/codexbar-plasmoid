@@ -15,6 +15,17 @@ PlasmaComponents3.Frame {
     property color accentColor: Kirigami.Theme.highlightColor
     property bool showCredits: true
     property bool showHistory: true
+    // Supplied by main.qml: one palette for tray and popup bars, one clock for
+    // every row.
+    property var fillColorFor: null
+    property real nowMs: Date.now()
+
+    function rowFillColor(percentLeft, pace) {
+        if (!card.fillColorFor) {
+            return Kirigami.Theme.highlightColor;
+        }
+        return card.fillColorFor(percentLeft, pace, card.accentColor);
+    }
 
     signal siteRequested()
 
@@ -52,7 +63,7 @@ PlasmaComponents3.Frame {
                 Layout.preferredHeight: Kirigami.Units.iconSizes.smallMedium
                 source: {
                     const id = String(card.entry ? card.entry.provider : "").toLowerCase().replace(/[-_]/g, "");
-                    const known = ["abacus", "alibaba", "amp", "antigravity", "augment", "bedrock", "claude", "codebuff", "codex", "commandcode", "copilot", "crof", "cursor", "deepgram", "deepseek", "demo", "devin", "doubao", "elevenlabs", "factory", "gemini", "grok", "groq", "jetbrains", "kilo", "kimi", "kiro", "llmproxy", "manus", "mimo", "minimax", "mistral", "ollama", "opencode", "opencodego", "openrouter", "perplexity", "stepfun", "synthetic", "t3chat", "venice", "vertexai", "warp", "windsurf", "zai"];
+                    const known = ["abacus", "alibaba", "amp", "antigravity", "augment", "bedrock", "claude", "clinepass", "codebuff", "codex", "commandcode", "copilot", "crof", "cursor", "deepgram", "deepseek", "demo", "devin", "doubao", "elevenlabs", "factory", "gemini", "grok", "groq", "jetbrains", "kilo", "kimi", "kiro", "llmproxy", "manus", "mimo", "minimax", "mistral", "ollama", "opencode", "opencodego", "openrouter", "perplexity", "stepfun", "synthetic", "t3chat", "venice", "vertexai", "warp", "windsurf", "zai"];
                     if (known.includes(id)) {
                         return Qt.resolvedUrl("../images/ProviderIcon-" + id + ".svg");
                     }
@@ -110,7 +121,23 @@ PlasmaComponents3.Frame {
                 title: modelData.title
                 percentLeft: modelData.percentLeft
                 resetsAt: modelData.resetsAt || ""
-                accentColor: card.accentColor
+                windowMinutes: Number(modelData.windowMinutes) || 0
+                pace: modelData.pace || null
+                nowMs: card.nowMs
+                fillColor: card.rowFillColor(modelData.percentLeft, modelData.pace || null)
+                paceIndicatorStyle: plasmoid.configuration.paceIndicatorStyle || "position"
+                paceIndicatorColor: {
+                    switch (paceIndicatorStyle) {
+                    case "bar":
+                        return fillColor;
+                    case "provider":
+                        return card.accentColor;
+                    case "theme":
+                        return Kirigami.Theme.textColor;
+                    default:
+                        return card.rowFillColor(timeLeftFraction * 100, null);
+                    }
+                }
             }
         }
 
@@ -119,7 +146,8 @@ PlasmaComponents3.Frame {
             visible: !card.isErrorOnly && card.entry && card.entry.codeReviewRemainingPercent !== null
             title: i18n("Code review")
             percentLeft: card.entry ? card.entry.codeReviewRemainingPercent : null
-            accentColor: card.accentColor
+            nowMs: card.nowMs
+            fillColor: card.rowFillColor(card.entry ? card.entry.codeReviewRemainingPercent : null, null)
         }
 
         RowLayout {
@@ -257,6 +285,16 @@ PlasmaComponents3.Frame {
             visible: !!(card.entry && card.entry.tokenUsage
                 && card.entry.tokenUsage.historyCoverageIsEstablished === false)
             text: i18n("Local history scan is incomplete. Totals may be missing usage; refresh to continue scanning.")
+            color: Kirigami.Theme.disabledTextColor
+            font: Kirigami.Theme.smallFont
+            wrapMode: Text.WordWrap
+        }
+
+        PlasmaComponents3.Label {
+            Layout.fillWidth: true
+            visible: !!(card.entry && card.entry.tokenUsage
+                && card.entry.tokenUsage.provenance === "listPriceEstimate")
+            text: i18n("Costs are list-price estimates, not billed charges.")
             color: Kirigami.Theme.disabledTextColor
             font: Kirigami.Theme.smallFont
             wrapMode: Text.WordWrap

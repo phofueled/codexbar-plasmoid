@@ -33,7 +33,11 @@ codexbar usage --format json --json-only --provider <provider> --source <source>
 codexbar cost --format json --json-only --provider <provider>
 ```
 
-For Linux-native providers (`antigravity`, `cursor`, `devin`, `opencode`, `opencodego`) with `source=native` or
+`codexbar cost` also accepts `--refresh`. The helper passes it for manual refreshes only, on the `codexbar` backend — native backends keep their existing
+arguments. The flag is deliberately excluded from the shared cache identity, so a manual refresh overwrites the slot other widgets read instead of creating a
+refresh-only entry.
+
+For Linux-native providers (`antigravity`, `commandcode`, `cursor`, `devin`, `grok`, `opencode`, `opencodego`) with `source=native` or
 `source=native-auth`, the helper calls the bundled Rust binary at `plasmoid/contents/code/codexbar-plasmoid`
 instead of `codexbar`. Antigravity `native-auth` uses user tokens under `~/.config/antigravity-usage` from
 `codexbar-plasmoid login --provider antigravity` (browser OAuth) or `antigravity-usage login`; plain `native`
@@ -72,7 +76,20 @@ The helper should output:
       "status": { "indicator": "none", "description": "Operational" },
       "error": null,
       "rows": [
-        { "id": "primary", "title": "Session", "percentLeft": 63, "resetsAt": "ISO-8601" }
+        {
+          "id": "primary",
+          "title": "Session",
+          "percentLeft": 63,
+          "resetsAt": "ISO-8601",
+          "windowMinutes": 300,
+          "pace": {
+            "willLastToReset": true,
+            "deltaPercent": -23,
+            "expectedUsedPercent": 60,
+            "etaSeconds": null,
+            "summary": "23% in reserve | Expected 60% used | Lasts until reset"
+          }
+        }
       ],
       "creditsRemaining": 112.4,
       "limitResetCredits": {
@@ -97,6 +114,8 @@ The helper should output:
         "sessionTokens": 128000,
         "last30DaysCostUSD": 41.2,
         "last30DaysTokens": 2180000,
+        "provenance": "listPriceEstimate",
+        "historyCoverageIsEstablished": false,
         "currencyCode": "USD",
         "sessionLabel": "Today",
         "last30DaysLabel": "30d"
@@ -138,12 +157,17 @@ On command failure:
 - Keep command timeout bounded by the plasmoid setting.
 - Preserve Linux behavior: web-backed sources may fail for providers that require macOS browser/WebKit access; surface the CLI error.
 - Treat `usage.primary/secondary/tertiary.usedPercent` as used percent and convert to percent left with `100 - usedPercent` when `remainingPercent` is absent.
+- Carry `windowMinutes` and a normalized `pace` object on each row when the CLI reports them (native `usage.usageRows` rows supply both directly; standard windows read `usage.<window>.windowMinutes` and `item.pace.<window>`).
+- `pace.summary` is CodexBar's own prose and is rendered verbatim. Leave it null for pace the helper computes itself so QML can build a translated line from `deltaPercent` / `expectedUsedPercent` / `etaSeconds`.
+- Compute fallback pace only from elapsed window time. When a row has no CLI pace and its reset lands at or beyond the full window length, report no pace at all rather than a verdict the data cannot support.
+- Append `usage.extraRateWindows` entries (`{ id, title, window }`) after the standard windows for both row shapes — the standard windows and native `usage.usageRows` payloads. Namespace their row ids as `extra:<id>`: a row id keys tray-bar selection and the per-window CLI pace lookup, so an unnamespaced scoped window could shadow primary/secondary/tertiary and inherit their pace report. Collapse a window the CLI reports twice; keep same-id-different-data windows as `extra:<id>#n`.
 - Use `openaiDashboard.dailyBreakdown` for credit history when available; otherwise use `cost.daily`.
 - Always pad `dailyUsage` to a continuous last-30 local-calendar-day window (zero-cost flat days when missing).
 - Preserve per-day `modelBreakdowns` as `models: [{ name, costUSD, totalTokens }]`.
 - Annotate calendar days where a usage row's `resetsAt` lands and `percentLeft > 0` as `limitResets` (unused limit resets).
 - Map Codex `usage.codexResetCredits` to entry `limitResetCredits` (`availableCount`, `nextExpiresAt`, `items`). When the primary source is `cli`/`codex-cli` and omits that field, enrich from a best-effort oauth usage fetch.
 - Cost lookup is best effort. A cost failure should populate `costError`, not discard successful usage entries.
+- Preserve `cost.provenance` (top level or `cost.totals.provenance`) and `cost.historyCoverageIsEstablished` on `tokenUsage`, so the card can label list-price estimates and warn while the local scan is still catching up.
 - QML number formatting is Qt/QML, not browser JS. Use `Number(value).toLocaleString(Qt.locale(), "f", digits)`, not options objects.
 
 ## Validation

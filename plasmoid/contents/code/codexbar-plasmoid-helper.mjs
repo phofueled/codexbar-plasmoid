@@ -22,6 +22,10 @@ const autoUpdate = args.autoUpdate === "true" || args["auto-update"] === "true";
 const updateTag = clean(args.tag) || "latest";
 const managedCliBinary = managedBinary();
 const sharedCacheSeconds = Math.max(0, Number(args.cacheSeconds || args["cache-seconds"] || 0));
+const costCacheArg = args.costCacheSeconds ?? args["cost-cache-seconds"];
+const costCacheSeconds = Math.max(0, Number(
+  costCacheArg === undefined ? sharedCacheSeconds : costCacheArg,
+));
 const forceRefresh = args.force === "true";
 const requestStartedAt = Date.now();
 
@@ -128,7 +132,7 @@ if (fs.existsSync(path.join(managedDir, "libsqlite3.so.0"))) {
 }
 const provider = clean(args.provider) || "all";
 const source = clean(args.source) || "auto";
-const localProviderConfigs = parseProviderConfigs(args.providers);
+const localProviderConfigs = parseProviderConfigs(providerConfigInput());
 const syncProviders = args.syncProviders === "true" || args["sync-providers"] === "true";
 const providerConfigs = syncProviders ? loadSharedProviderConfigs(localProviderConfigs) : localProviderConfigs;
 const includeCost = args.cost !== "false";
@@ -137,17 +141,22 @@ const showCredits = args.credits !== "false";
 const anonymizeEmails = args.anonymizeEmails !== "false" && args["anonymize-emails"] !== "false";
 const kdeProviderConfig = loadKdeProviderConfig();
 
-const nativeProviders = new Set(["antigravity", "cursor", "devin", "grok", "opencode", "opencodego"]);
+const nativeProviders = new Set(["antigravity", "commandcode", "cursor", "devin", "grok", "opencode", "opencodego"]);
 
 // Upstream codexbar cost only scans Claude/Codex local logs. Native cost covers
-// OpenCode SQLite, Cursor dashboard events, and Grok local session usage.
+// OpenCode SQLite, Cursor dashboard events, Grok local session usage, and
+// Command Code session transcripts.
 // Antigravity / Devin only expose quota percentages (no absolute token history).
 const CODEXBAR_COST_PROVIDERS = new Set(["codex", "claude"]);
-const NATIVE_COST_PROVIDERS = new Set(["opencode", "opencodego", "cursor", "grok"]);
+const NATIVE_COST_PROVIDERS = new Set(["opencode", "opencodego", "cursor", "grok", "commandcode"]);
 
 const linuxAutoFallbacks = {
   codex: "oauth", // Direct limits endpoint avoids intermittent local app-server RPC timeouts.
   claude: "cli",
+  clinepass: "api",
+  // Command Code's web source needs a logged-in commandcode.ai browser session;
+  // the native fetcher reuses the `cmd login` key in ~/.commandcode/auth.json.
+  commandcode: "native",
   cursor: "native",
   opencode: "native",
   opencodego: "native",
@@ -412,13 +421,23 @@ function runUsageForConfig(config) {
 function buildDemoUsagePayload(config) {
   const now = new Date();
   const percents = parseDemoPercents(clean(config.account));
+  // Keep every reset inside its window so the demo exercises both the
+  // time-left marker and the helper's fallback pace calculation.
+  const timings = [
+    { windowMinutes: 300, resetInMinutes: 60 },
+    { windowMinutes: 300, resetInMinutes: 180 },
+    { windowMinutes: 10080, resetInMinutes: 2880 },
+    { windowMinutes: 43200, resetInMinutes: 17280 },
+  ];
   const usageRows = percents.map((percentLeft, index) => {
     const title = demoRowTitle(index, percentLeft);
+    const timing = timings[index] || timings[timings.length - 1];
     return {
       id: `demo-${index + 1}`,
       title,
       percentLeft,
-      resetsAt: new Date(now.getTime() + (index + 1) * 36e5 * 6).toISOString(),
+      windowMinutes: timing.windowMinutes,
+      resetsAt: new Date(now.getTime() + timing.resetInMinutes * 60000).toISOString(),
     };
   });
 
@@ -584,10 +603,13 @@ function fetchCostWithCommand(command, providerId, backend) {
     "--provider",
     providerId,
   ];
-  // A manual refresh must bypass both our shared cache and the CLI scan debounce.
-  if (forceRefresh && backend === "codexbar") {
-    commandArgs.push("--refresh");
-  }
+  // A manual refresh must bypass the CLI's own scan debounce. The flag is kept
+  // out of the shared cache identity passed to sharedFetch below, so the
+  // refreshed result overwrites the slot every widget polls instead of landing
+  // in a refresh-only slot.
+  const runArgs = forceRefresh && backend === "codexbar"
+    ? [...commandArgs, "--refresh"]
+    : commandArgs;
   try {
     const payload = sharedFetch("cost", {
       command,
@@ -597,14 +619,14 @@ function fetchCostWithCommand(command, providerId, backend) {
     }, () => {
       try {
         const extraEnv = backend === "codexbar" ? { SWIFT_TESTING: "1" } : {};
-        return runJSON(command, commandArgs, providerId, "", "", extraEnv);
+        return runJSON(command, runArgs, providerId, "", "", extraEnv);
       } catch (error) {
         return [{
           provider: "cost",
           error: { message: shortError(error, command) },
         }];
       }
-    });
+    }, costCacheSeconds);
     return asArray(payload);
   } catch (error) {
     return [{
@@ -614,8 +636,8 @@ function fetchCostWithCommand(command, providerId, backend) {
   }
 }
 
-function sharedFetch(namespace, identity, producer) {
-  if (sharedCacheSeconds <= 0) {
+function sharedFetch(namespace, identity, producer, cacheSeconds = sharedCacheSeconds) {
+  if (cacheSeconds <= 0) {
     return producer();
   }
 
@@ -629,7 +651,7 @@ function sharedFetch(namespace, identity, producer) {
   const waitDeadline = Date.now() + timeoutMs + 5000;
 
   while (true) {
-    const cached = readSharedCache(cachePath, forceRefresh);
+    const cached = readSharedCache(cachePath, forceRefresh, cacheSeconds);
     if (cached.hit) {
       return cached.value;
     }
@@ -640,7 +662,7 @@ function sharedFetch(namespace, identity, producer) {
       fs.writeFileSync(lockFd, `${process.pid}\n${Date.now()}\n`);
 
       // Another helper may have populated the cache between our read and lock.
-      const afterLock = readSharedCache(cachePath, forceRefresh);
+      const afterLock = readSharedCache(cachePath, forceRefresh, cacheSeconds);
       if (afterLock.hit) {
         return afterLock.value;
       }
@@ -672,12 +694,12 @@ function sharedProviderCacheDir() {
   return path.join(cacheHome, "codexbar-plasmoid", "provider-cache");
 }
 
-function readSharedCache(cachePath, forced) {
+function readSharedCache(cachePath, forced, cacheSeconds) {
   try {
     const stat = fs.statSync(cachePath);
     const freshEnough = forced
       ? stat.mtimeMs >= requestStartedAt
-      : Date.now() - stat.mtimeMs <= sharedCacheSeconds * 1000;
+      : Date.now() - stat.mtimeMs <= cacheSeconds * 1000;
     if (!freshEnough) {
       return { hit: false, value: null };
     }
@@ -734,6 +756,7 @@ function discoverInstalledAgents() {
   const candidates = [
     { provider: "codex", commands: ["codex"], paths: [path.join(home, ".codex")] },
     { provider: "claude", commands: ["claude"], paths: [path.join(home, ".claude")] },
+    { provider: "commandcode", commands: ["cmd", "command-code"], paths: [path.join(home, ".commandcode")] },
     { provider: "cursor", commands: ["cursor"], paths: [path.join(configHome, "Cursor"), path.join(home, ".cursor")] },
     { provider: "antigravity", commands: ["antigravity", "agy"], paths: [path.join(configHome, "Antigravity"), path.join(configHome, "antigravity"), path.join(configHome, "antigravity-usage")] },
     { provider: "augment", commands: ["augment"], paths: [path.join(home, ".augment")] },
@@ -934,7 +957,7 @@ function normalizeProvider(item, cost) {
   const dashboard = item.openaiDashboard || {};
   const identity = usage.identity || {};
   const source = item.source || "unknown";
-  const rows = usageRows(providerId, usage, source);
+  const rows = usageRows(providerId, usage, source, item.pace || {});
   const dailyUsage = annotateLimitResets(dailyUsagePoints(dashboard, cost), rows);
   const rawAccount = item.account || usage.accountEmail || identity.accountEmail || null;
   const account = anonymizeEmails ? anonymizeIdentity(rawAccount) : rawAccount;
@@ -1098,14 +1121,157 @@ function configuredProviderSiteUrl(providerId) {
   }
 }
 
-function usageRows(providerId, usage, source) {
+/**
+ * CodexBar's per-window pace report: whether the remaining budget lasts until
+ * the window resets at the current burn rate. Null when the CLI has none.
+ */
+function normalizePace(pace) {
+  if (!pace || typeof pace !== "object") {
+    return null;
+  }
+  const willLastToReset = typeof pace.willLastToReset === "boolean" ? pace.willLastToReset : null;
+  const deltaPercent = numberOrNull(pace.deltaPercent);
+  if (willLastToReset === null && deltaPercent === null) {
+    return null;
+  }
+  return {
+    willLastToReset,
+    // Negative = budget in reserve versus the expected burn; positive = deficit.
+    deltaPercent,
+    expectedUsedPercent: numberOrNull(pace.expectedUsedPercent),
+    etaSeconds: numberOrNull(pace.etaSeconds),
+    // CodexBar's own prose, rendered verbatim by the widget. Locally computed
+    // pace leaves this null so QML builds a translated line from the fields.
+    summary: typeof pace.summary === "string" ? pace.summary : null,
+  };
+}
+
+/**
+ * Fallback pace when the CLI reports none for a window but we know its length
+ * and reset time: compare budget used against the fraction of the window
+ * elapsed, as CodexBar does for primary/secondary. Returns null when the data
+ * cannot support a projection (no reset time, no window length, or a reset at
+ * or beyond the full window length).
+ */
+function computePace(percentLeft, resetsAt, windowMinutes, now = Date.now()) {
+  if (percentLeft === null || !resetsAt || !(windowMinutes > 0)) {
+    return null;
+  }
+  const resetMs = new Date(resetsAt).getTime();
+  if (!Number.isFinite(resetMs)) {
+    return null;
+  }
+  const windowMs = windowMinutes * 60000;
+  const elapsed = 1 - (resetMs - now) / windowMs;
+  // A reset at or beyond the full window length means no window time has
+  // elapsed, so there is no burn rate to project from. Report nothing rather
+  // than a verdict the data cannot support.
+  if (!(elapsed > 0)) {
+    return null;
+  }
+  const elapsedFraction = Math.min(1, elapsed);
+  const used = Math.max(0, Math.min(1, 1 - percentLeft / 100));
+  const expectedUsedPercent = Math.round(elapsedFraction * 100);
+  const deltaPercent = Math.round((used - elapsedFraction) * 100);
+  const willLastToReset = used <= elapsedFraction;
+  let etaSeconds = null;
+  if (!willLastToReset && used > 0) {
+    // Time until empty at the current average burn rate.
+    etaSeconds = Math.max(0, Math.round(((1 - used) / (used / elapsedFraction)) * windowMs / 1000));
+  }
+  // No prose here: the widget builds the pace line with i18n() from these
+  // fields, and CodexBar's own summary (when present) wins instead.
+  return {
+    willLastToReset,
+    deltaPercent,
+    expectedUsedPercent,
+    etaSeconds,
+    summary: null,
+  };
+}
+
+/**
+ * Scoped rate windows the CLI reports beyond the standard three, e.g. Claude's
+ * per-model weekly limits ("Fable only"). Shape: { id, title, window }.
+ *
+ * Row ids are namespaced as `extra:<id>`: a row id keys tray-bar selection and
+ * the per-window CLI pace lookup, so an unnamespaced scoped window could shadow
+ * primary/secondary/tertiary and inherit their pace report. A window the CLI
+ * reports twice is collapsed; the same id with different data keeps both rows
+ * as `extra:<id>#n`.
+ */
+function extraRateWindowEntries(usage) {
+  const entries = [];
+  const seenIds = new Set();
+  const seenWindows = new Set();
+  for (const extra of Array.isArray(usage.extraRateWindows) ? usage.extraRateWindows : []) {
+    if (!extra || typeof extra !== "object" || !extra.window) {
+      continue;
+    }
+    const rawId = clean(extra.id) || clean(extra.title);
+    if (!rawId) {
+      continue;
+    }
+    const window = extra.window;
+    const fingerprint = JSON.stringify([
+      rawId,
+      window.usedPercent,
+      window.remainingPercent,
+      window.resetsAt,
+      window.windowMinutes,
+    ]);
+    if (seenWindows.has(fingerprint)) {
+      continue;
+    }
+    seenWindows.add(fingerprint);
+    let id = `extra:${rawId}`;
+    for (let n = 2; seenIds.has(id); n += 1) {
+      id = `extra:${rawId}#${n}`;
+    }
+    seenIds.add(id);
+    entries.push([id, clean(extra.title) || rawId, window]);
+  }
+  return entries;
+}
+
+/** One usage bar row built from a CodexBar usage window. */
+function windowUsageRow(id, title, window, paceReport) {
+  const usedPercent = numberOrNull(window?.usedPercent);
+  const remainingPercent = numberOrNull(window?.remainingPercent);
+  const percentLeft = remainingPercent !== null
+    ? remainingPercent
+    : usedPercent !== null
+      ? Math.max(0, Math.min(100, 100 - usedPercent))
+      : null;
+  const resetsAt = window?.resetsAt || null;
+  const windowMinutes = numberOrNull(window?.windowMinutes);
+  return {
+    id,
+    title,
+    percentLeft,
+    resetsAt,
+    windowMinutes,
+    pace: normalizePace(paceReport) || computePace(percentLeft, resetsAt, windowMinutes),
+  };
+}
+
+function usageRows(providerId, usage, source, pace = {}) {
+  // Scoped windows are rate windows the CLI reported explicitly, so they are
+  // never treated as an API balance placeholder.
+  const scoped = extraRateWindowEntries(usage)
+    .map(([id, title, window]) => windowUsageRow(id, title, window, null))
+    .filter((row) => row.percentLeft !== null);
   if (Array.isArray(usage.usageRows)) {
-    return usage.usageRows.map((row) => ({
+    const native = usage.usageRows.map((row) => ({
       id: String(row.id || row.title || "usage"),
       title: String(row.title || "Usage"),
       percentLeft: numberOrNull(row.percentLeft),
       resetsAt: row.resetsAt || null,
+      windowMinutes: numberOrNull(row.windowMinutes),
+      pace: normalizePace(row.pace)
+        || computePace(numberOrNull(row.percentLeft), row.resetsAt || null, numberOrNull(row.windowMinutes)),
     })).filter((row) => row.percentLeft !== null);
+    return native.concat(scoped);
   }
 
   const labels = providerLabels(providerId);
@@ -1115,22 +1281,17 @@ function usageRows(providerId, usage, source) {
     ["tertiary", labels.tertiary, usage.tertiary],
   ];
 
-  return windows.map(([id, title, window]) => {
-    const usedPercent = numberOrNull(window?.usedPercent);
-    const remainingPercent = numberOrNull(window?.remainingPercent);
-    const percentLeft = remainingPercent !== null
-      ? remainingPercent
-      : usedPercent !== null
-        ? Math.max(0, Math.min(100, 100 - usedPercent))
-        : null;
-    const resetsAt = window?.resetsAt || null;
-    // For API providers, a window without resetsAt is just a balance placeholder,
-    // not a real usage bar. Skip it so the balance summary renders instead.
-    if (source === "api" && !resetsAt && percentLeft !== null) {
+  const standard = windows.map(([id, title, window]) => {
+    const row = windowUsageRow(id, title, window, pace?.[id]);
+    // API balance placeholders have no reset time or window duration. A real
+    // window can omit its reset time, such as ClinePass's monthly quota.
+    if (source === "api" && !row.resetsAt && !(row.windowMinutes > 0) && row.percentLeft !== null) {
       return null;
     }
-    return { id, title, percentLeft, resetsAt };
+    return row;
   }).filter((row) => row !== null && row.percentLeft !== null);
+
+  return standard.concat(scoped);
 }
 
 function parseBalanceFromDescription(description) {
@@ -1365,6 +1526,10 @@ function providerLabels(providerId) {
   switch (providerId) {
     case "claude":
       return { session: "Session", weekly: "Weekly", tertiary: "Opus" };
+    case "clinepass":
+      // Upstream ClinePass reports a 5-hour window, a weekly window, and a
+      // monthly window (primaryBindingQuotaLanes: secondary + tertiary).
+      return { session: "5-hour", weekly: "Weekly", tertiary: "Monthly" };
     case "codex":
       return { session: "Session", weekly: "Weekly", tertiary: "Long window" };
     case "kilo":
@@ -1384,6 +1549,9 @@ function providerLabels(providerId) {
     case "grok":
       // xAI UI labels this "Weekly SuperGrok Limit"; primary window is the weekly pool.
       return { session: "Weekly", weekly: "Weekly", tertiary: "Extra" };
+    case "commandcode":
+      // /alpha/billing/credits reports a rolling 5-hour and a weekly credit window.
+      return { session: "5-hour", weekly: "Weekly", tertiary: "Extra" };
     case "demo":
       return { session: "Low", weekly: "Session", tertiary: "Weekly" };
     default:
@@ -1414,6 +1582,86 @@ function parseProviderConfigs(raw) {
       includeCost: item.includeCost !== false,
       _fromConfigs: true,
     }));
+}
+
+function providerConfigInput() {
+  const appletId = clean(args.appletId || args["applet-id"]);
+  if (!appletId) {
+    return args.providers;
+  }
+  const stored = readAppletConfigValue(appletId, "providerConfigs");
+  return stored === null ? args.providers : stored;
+}
+
+function readAppletConfigValue(appletId, key) {
+  if (!/^[A-Za-z0-9._-]+$/.test(appletId)) {
+    return null;
+  }
+  const configHome = clean(process.env.XDG_CONFIG_HOME) || path.join(os.homedir(), ".config");
+  const configFileName = "plasma-org.kde.plasma.desktop-appletsrc";
+  const configPath = path.join(configHome, configFileName);
+  let raw;
+  try {
+    raw = fs.readFileSync(configPath, "utf8");
+  } catch {
+    return null;
+  }
+
+  const escapedId = appletId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const sectionPattern = new RegExp(
+    `^\\[Containments\\]\\[([^\\]]+)\\]\\[Applets\\]\\[${escapedId}\\]\\[Configuration\\]\\[General\\]$`,
+    "m",
+  );
+  const section = sectionPattern.exec(raw);
+  if (!section) {
+    return null;
+  }
+
+  try {
+    return execFileSync("kreadconfig6", [
+      "--file", configFileName,
+      "--group", "Containments",
+      "--group", section[1],
+      "--group", "Applets",
+      "--group", appletId,
+      "--group", "Configuration",
+      "--group", "General",
+      "--key", key,
+    ], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 5000,
+    }).trim();
+  } catch {
+    return readKConfigValueFromSection(raw, section, key);
+  }
+}
+
+function readKConfigValueFromSection(raw, section, key) {
+  const sectionStart = section.index + section[0].length;
+  const remainder = raw.slice(sectionStart);
+  const nextSection = remainder.search(/^\[/m);
+  const body = nextSection === -1 ? remainder : remainder.slice(0, nextSection);
+  const prefix = `${key}=`;
+  const line = body.split(/\r?\n/).find((item) => item.startsWith(prefix));
+  return line === undefined ? null : decodeKConfigValue(line.slice(prefix.length));
+}
+
+function decodeKConfigValue(raw) {
+  let decoded = "";
+  for (let index = 0; index < raw.length; index += 1) {
+    if (raw[index] !== "\\" || index + 1 >= raw.length) {
+      decoded += raw[index];
+      continue;
+    }
+    index += 1;
+    const escaped = raw[index];
+    if (escaped === "n") decoded += "\n";
+    else if (escaped === "r") decoded += "\r";
+    else if (escaped === "t") decoded += "\t";
+    else decoded += escaped;
+  }
+  return decoded;
 }
 
 function loadSharedProviderConfigs(fallback) {
@@ -1547,6 +1795,8 @@ function providerApiKeyEnvName(providerId) {
       return "ALIBABA_API_KEY";
     case "alibabatokenplan":
       return "ALIBABA_API_KEY";
+    case "clinepass":
+      return "CLINE_API_KEY";
     case "copilot":
       return "GITHUB_TOKEN";
     case "deepseek":

@@ -62,7 +62,8 @@ PlasmoidItem {
     readonly property var visibleEntries: resolveVisibleEntries(entries, effectiveSelectedEntryIds)
     readonly property var defaultEntry: entries.length > 0 ? entries[0] : null
     readonly property var primaryEntry: visibleEntries.length > 0 ? visibleEntries[0] : null
-    readonly property int refreshInterval: Math.max(60, plasmoid.configuration.refreshIntervalSeconds || 300)
+    readonly property int refreshInterval: Math.max(60, plasmoid.configuration.refreshIntervalSeconds || 150)
+    readonly property int costRefreshInterval: Math.max(300, plasmoid.configuration.costRefreshIntervalSeconds || 3600)
 
     preferredRepresentation: Plasmoid.formFactor === PlasmaCore.Types.Planar ? fullRepresentation : compactRepresentation
     toolTipMainText: primaryEntry
@@ -123,6 +124,19 @@ PlasmoidItem {
         id: providerEntryModel
     }
 
+    // Wall clock for the usage-bar time markers, shared by every row instead of
+    // one timer per row.
+    property real nowMs: Date.now()
+
+    Timer {
+        id: clockTimer
+        interval: 60000
+        repeat: true
+        running: root.visible
+        triggeredOnStart: false
+        onTriggered: root.nowMs = Date.now()
+    }
+
     Timer {
         id: refreshTimer
         interval: root.refreshInterval * 1000
@@ -148,7 +162,7 @@ PlasmoidItem {
             const parts = [
                 quote(script),
                 "--cli", quote(plasmoid.configuration.cliPath || "codexbar"),
-                "--providers", quote(plasmoid.configuration.providerConfigs || ""),
+                "--applet-id", quote(root.appletInstanceKey()),
                 "--provider", quote(plasmoid.configuration.provider || "all"),
                 "--source", quote(plasmoid.configuration.source || "auto"),
                 "--timeout", quote(plasmoid.configuration.requestTimeoutSeconds || 45),
@@ -162,6 +176,7 @@ PlasmoidItem {
                 "--auto-update", quote(plasmoid.configuration.autoUpdateCli ? "true" : "false"),
                 "--tag", quote(plasmoid.configuration.cliUpdateChannel || "latest"),
                 "--cache-seconds", quote(plasmoid.configuration.shareProviderFetches === false ? 0 : root.refreshInterval),
+                "--cost-cache-seconds", quote(root.costRefreshInterval),
                 "--force", quote(forceRefresh ? "true" : "false")
             ];
             return parts.join(" ");
@@ -173,6 +188,7 @@ PlasmoidItem {
                 openai: "OpenAI",
                 azureopenai: "Azure OpenAI",
                 claude: "Claude",
+                clinepass: "ClinePass",
                 gemini: "Gemini",
                 antigravity: "Antigravity",
                 cursor: "Cursor",
@@ -236,6 +252,7 @@ PlasmoidItem {
                 openai: "https://platform.openai.com/usage",
                 azureopenai: "https://portal.azure.com/#view/Microsoft_Azure_CostManagement/Menu/~/overview",
                 claude: "https://platform.claude.com/settings/billing",
+                clinepass: "https://app.cline.bot/dashboard/subscription?personal=true",
                 gemini: "https://aistudio.google.com/usage",
                 antigravity: "https://antigravity.google/",
                 cursor: "https://cursor.com/dashboard",
@@ -294,6 +311,8 @@ PlasmoidItem {
                 openai: "#398979",
                 azureopenai: "#397fb7",
                 claude: "#b57861",
+                clinepass: "#5a8fd6",
+                commandcode: "#a1579c",
                 gemini: "#8972b5",
                 antigravity: "#55976b",
                 cursor: "#3c9487",
@@ -379,10 +398,64 @@ PlasmoidItem {
             return Qt.rgba(1, yG * u, yB * u, 1);
         }
 
-        function compactBarColor(provider, percentLeft) {
+        function paceToResetEnabled() {
+            return (plasmoid.configuration.compactBarsTint || "provider") === "pace";
+        }
+
+        // Pace palette: white = comfortable reserve, yellow = on track but
+        // tight, red = the CLI projects the window runs dry before reset.
+        // Returns null when there is no verdict to show, so callers fall back
+        // to the remaining-limit gradient. Rows the CLI does not pace carry a
+        // locally computed pace, so this covers both.
+        function pacePalette(pace, percentLeft) {
+            if (!pace || (pace.willLastToReset === null && pace.deltaPercent === null)) {
+                return null;
+            }
+            // Too early in the window to project: right after a reset both
+            // usage and elapsed time are ~0, which reads as "tight" or even
+            // "runs dry" on a single request. Wait for 10% of the window.
+            const expected = Number(pace.expectedUsedPercent);
+            if (Number.isFinite(expected) && expected < 10) {
+                return null;
+            }
+            if (pace.willLastToReset === false) {
+                return Qt.rgba(1, 0, 0, 1);
+            }
+            const delta = Number(pace.deltaPercent);
+            // deltaPercent < 0 means budget in reserve versus the expected burn.
+            if (Number.isFinite(delta) && delta > -10) {
+                return Qt.rgba(1.0, 0.92, 0.45, 1);
+            }
+            return Qt.rgba(1, 1, 1, 1);
+        }
+
+        function paceColor(row, percentLeft) {
+            return pacePalette(row && row.pace ? row.pace : null, percentLeft)
+                || remainingLimitColor(percentLeft);
+        }
+
+        // Fill colour for popup usage bars: the same palette implementation the
+        // tray bars above use, so the two views cannot drift apart.
+        function usageBarFillColor(percentLeft, pace, accentColor) {
+            if (!Number.isFinite(Number(percentLeft))) {
+                return accentColor;
+            }
+            if (paceToResetEnabled()) {
+                const paced = pacePalette(pace, percentLeft);
+                if (paced) {
+                    return paced;
+                }
+            }
+            return remainingLimitColor(percentLeft);
+        }
+
+        function compactBarColor(provider, percentLeft, row) {
             const tint = plasmoid.configuration.compactBarsTint || "provider";
             if (tint === "threshold") {
                 return remainingLimitColor(percentLeft);
+            }
+            if (tint === "pace") {
+                return paceColor(row, percentLeft);
             }
             if (tint === "theme") {
                 return Kirigami.Theme.textColor;
@@ -593,7 +666,7 @@ PlasmoidItem {
                     id: String(row.id || ["primary", "secondary", "tertiary"][index] || ""),
                     title: String(row.title || ""),
                     percentLeft: Math.max(0, Math.min(100, percentLeft)),
-                    color: compactBarColor(entry.provider, percentLeft)
+                    color: compactBarColor(entry.provider, percentLeft, row)
                 });
             }
             if (output.length === 0 && filteredRows.length > 0) {
@@ -843,6 +916,9 @@ PlasmoidItem {
     }
 
     function refreshNow(forceRefresh) {
+        if (loading) {
+            return false;
+        }
         const command = codexBar.command(forceRefresh === true);
         if (previousCommand.length > 0) {
             executable.disconnectSource(previousCommand);
@@ -852,6 +928,7 @@ PlasmoidItem {
         loading = true;
         lastError = "";
         executable.connectSource(command);
+        return true;
     }
 
     function openProviderSite(entry) {
@@ -1555,6 +1632,11 @@ PlasmoidItem {
 
                 delegate: ProviderCard {
                     id: providerCard
+
+                    // The palette and the wall clock live here so tray bars and
+                    // popup bars cannot disagree.
+                    fillColorFor: codexBar.usageBarFillColor
+                    nowMs: root.nowMs
 
                     required property string entryId
                     required property string provider

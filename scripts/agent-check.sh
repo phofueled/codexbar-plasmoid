@@ -158,6 +158,41 @@ if [[ "$use_mock" -eq 1 ]] && command -v node >/dev/null 2>&1; then
               const codex = j.entries.find(e=>e.provider === "codex");
               if(codex?.tokenUsage?.provenance !== "listPriceEstimate") process.exit(5);
               if(codex?.tokenUsage?.historyCoverageIsEstablished !== false) process.exit(6);
+              const rowOf = (p, id) => ((j.entries.find(e=>e.provider===p)||{}).rows||[]).find(r=>r.id===id);
+              const cxPrimary = rowOf("codex", "primary");
+              const cxSecondary = rowOf("codex", "secondary");
+              const clPrimary = rowOf("claude", "primary");
+              const clTertiary = rowOf("claude", "tertiary");
+              if(cxPrimary?.windowMinutes !== 300) process.exit(5);
+              if(cxPrimary?.pace?.willLastToReset !== true) process.exit(6);
+              if(!Number.isFinite(cxSecondary?.pace?.expectedUsedPercent)) process.exit(7);
+              if(clPrimary?.pace?.willLastToReset !== false) process.exit(8);
+              // Reset beyond the window length must yield no pace verdict at all.
+              if(clTertiary?.windowMinutes !== 300 || clTertiary?.pace !== null) process.exit(9);
+              // Scoped rate windows keep namespaced ids and their own pace.
+              const claudeRows = (j.entries.find(e=>e.provider==="claude")||{}).rows || [];
+              const scoped = claudeRows.filter(r=>String(r.id).startsWith("extra:"));
+              if(scoped.length !== 3) process.exit(10);
+              if(scoped.filter(r=>r.id === "extra:claude-weekly-scoped-fable").length !== 1) process.exit(11);
+              if(!scoped.some(r=>r.id === "extra:claude-weekly-scoped-fable#2")) process.exit(12);
+              const colliding = scoped.find(r=>r.id === "extra:primary");
+              if(!colliding || colliding.pace?.summary !== null) process.exit(13);
+              if(!clPrimary?.pace?.summary) process.exit(14);
+              // Native usageRows payloads keep scoped windows too.
+              const nativeEntry = j.entries.find(e=>e.provider==="mocknative");
+              if((nativeEntry?.rows||[]).length !== 2) process.exit(15);
+              if(!(nativeEntry?.rows||[]).some(r=>r.id === "extra:native-scoped")) process.exit(16);
+              const codex = j.entries.find(e=>e.provider === "codex");
+              if(codex?.tokenUsage?.provenance !== "listPriceEstimate") process.exit(17);
+              if(codex?.tokenUsage?.historyCoverageIsEstablished !== false) process.exit(18);
+              const cpPrimary = rowOf("clinepass", "primary");
+              const cpSecondary = rowOf("clinepass", "secondary");
+              const cpTertiary = rowOf("clinepass", "tertiary");
+              const openRouter = j.entries.find(e=>e.provider==="openrouter");
+              if(cpPrimary?.title !== "5-hour" || cpPrimary?.percentLeft !== 65 || cpPrimary?.windowMinutes !== 300) process.exit(19);
+              if(cpSecondary?.title !== "Weekly" || cpSecondary?.percentLeft !== 45 || cpSecondary?.windowMinutes !== 10080) process.exit(20);
+              if(cpTertiary?.title !== "Monthly" || cpTertiary?.percentLeft !== 25 || cpTertiary?.resetsAt !== null || cpTertiary?.windowMinutes !== 43200 || cpTertiary?.pace !== null) process.exit(21);
+              if(!openRouter || openRouter.rows?.length !== 0 || openRouter.creditsRemaining !== 12.5) process.exit(22);
               console.log(j.entries.map(e=>e.provider).join(","));
             } catch { process.exit(4); }
           });
@@ -173,6 +208,98 @@ if [[ "$use_mock" -eq 1 ]] && command -v node >/dev/null 2>&1; then
   fi
 else
   skp "mock helper smoke"
+fi
+
+# --- manual refresh arguments + shared cache reuse ---
+section "manual refresh (mock CLI)"
+if [[ "$use_mock" -eq 1 ]] && command -v node >/dev/null 2>&1; then
+  [[ -n "${mock_bin_dir:-}" ]] || mock_bin_dir="$("$repo_root/scripts/setup-mock-cli.sh" --print-bin)"
+  arglog_dir="$(mktemp -d)"
+  arglog="$arglog_dir/args.txt"
+  wrapper="$arglog_dir/codexbar-arglog"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexec "%s" "$@"\n' "$arglog" "$mock_bin_dir/codexbar" >"$wrapper"
+  chmod +x "$wrapper"
+  helper="plasmoid/contents/code/codexbar-plasmoid-helper.mjs"
+  # run_helper <provider> <source> <cache-dir> <force> [usage-cache-seconds] [cost-cache-seconds]
+  run_helper() {
+    XDG_CACHE_HOME="$3" node "$helper" --cli "$wrapper" --nativeCli "$wrapper" \
+      --provider "$1" --source "$2" --timeout 5 \
+      --cache-seconds "${5:-300}" --cost-cache-seconds "${6:-3600}" \
+      --force "$4" >/dev/null 2>&1 || true
+  }
+
+  # Automatic refresh never asks the CLI to rescan.
+  run_helper codex cli "$arglog_dir/cache-auto" false
+  if grep -q '^cost .*--provider codex$' "$arglog" && ! grep -q '^cost .*--refresh' "$arglog"; then
+    ok "automatic refresh sends the plain cost command"
+  else
+    bad "automatic refresh arguments ($(tr '\n' '|' <"$arglog"))"
+  fi
+
+  # A manual refresh bypasses the CLI scan debounce, on the cost call only.
+  : >"$arglog"
+  run_helper codex cli "$arglog_dir/cache-manual" true
+  if grep -q '^cost .*--provider codex --refresh$' "$arglog" && ! grep -q '^usage .*--refresh' "$arglog"; then
+    ok "manual refresh passes --refresh to the cost backend only"
+  else
+    bad "manual refresh arguments ($(tr '\n' '|' <"$arglog"))"
+  fi
+
+  # Native backends keep their existing arguments.
+  : >"$arglog"
+  run_helper opencode native "$arglog_dir/cache-native" true
+  if grep -q '^cost .*--provider opencode$' "$arglog" && ! grep -q '^cost .*--refresh' "$arglog"; then
+    ok "native backend cost arguments unchanged"
+  else
+    bad "native backend arguments ($(tr '\n' '|' <"$arglog"))"
+  fi
+
+  # The manual result has to land in the slot automatic polling reads.
+  : >"$arglog"
+  run_helper codex cli "$arglog_dir/cache-shared" true
+  manual_calls="$(grep -c '^cost .*--provider codex' "$arglog" || true)"
+  run_helper codex cli "$arglog_dir/cache-shared" false
+  shared_calls="$(grep -c '^cost .*--provider codex' "$arglog" || true)"
+  if [[ "$manual_calls" == "1" && "$shared_calls" == "1" ]]; then
+    ok "manual refresh result is reused by the shared cache"
+  else
+    bad "manual refresh wrote a separate cache entry ($manual_calls -> $shared_calls cost calls)"
+  fi
+
+  # Cost history keeps its longer cadence even when usage sharing is disabled.
+  : >"$arglog"
+  run_helper codex cli "$arglog_dir/cache-split" false 0 3600
+  run_helper codex cli "$arglog_dir/cache-split" false 0 3600
+  usage_calls="$(grep -c '^usage .*--provider codex' "$arglog" || true)"
+  cost_calls="$(grep -c '^cost .*--provider codex' "$arglog" || true)"
+  if [[ "$usage_calls" == "2" && "$cost_calls" == "1" ]]; then
+    ok "usage and cost caches use separate intervals"
+  else
+    bad "separate cache intervals made $usage_calls usage calls and $cost_calls cost calls"
+  fi
+
+  # The widget passes an applet id, so provider secrets do not appear in ps output.
+  applet_config_home="$arglog_dir/config"
+  mkdir -p "$applet_config_home"
+  kwriteconfig6 --file "$applet_config_home/plasma-org.kde.plasma.desktop-appletsrc" \
+    --group Containments --group 9 --group Applets --group 42 \
+    --group Configuration --group General --key providerConfigs \
+    '[{"provider":"codex","source":"cli","enabled":true,"apiKey":"test-secret"}]'
+  : >"$arglog"
+  XDG_CONFIG_HOME="$applet_config_home" XDG_CACHE_HOME="$arglog_dir/cache-applet" \
+    node "$helper" --cli "$wrapper" --nativeCli "$wrapper" \
+      --applet-id 42 --provider all --source auto --timeout 5 \
+      --cache-seconds 0 --cost-cache-seconds 3600 --force false >/dev/null 2>&1 || true
+  if grep -q '^usage .*--provider codex --source cli' "$arglog" \
+      && ! rg -q 'test-secret' plasmoid/contents/ui/main.qml; then
+    ok "helper loads provider settings by applet id"
+  else
+    bad "applet provider settings were not loaded"
+  fi
+
+  rm -rf "$arglog_dir"
+else
+  skp "manual refresh smoke"
 fi
 
 # --- isolated configuration page ---

@@ -35,9 +35,9 @@ The install script builds the bundled Linux helper, removes older package IDs if
 From a release archive (`.plasmoid`):
 
 ```sh
-kpackagetool6 --type Plasma/Applet --install codexbar-plasmoid-v0.1.8-plasma6.plasmoid
+kpackagetool6 --type Plasma/Applet --install codexbar-plasmoid-v0.1.11-plasma6.plasmoid
 # or upgrade:
-kpackagetool6 --type Plasma/Applet --upgrade codexbar-plasmoid-v0.1.8-plasma6.plasmoid
+kpackagetool6 --type Plasma/Applet --upgrade codexbar-plasmoid-v0.1.11-plasma6.plasmoid
 ```
 
 Then add **CodexBar** from the Plasma widget explorer (System Information).
@@ -150,9 +150,9 @@ Provider rows are saved as a JSON list in the `providerConfigs` Plasma setting. 
 ```
 
 `source` can be `auto`, `cli`, `oauth`, `api`, `web`, or `native`, depending on the provider. On Linux, `auto` maps
-native-capable providers to the bundled native fetcher where appropriate: Antigravity, Cursor, Devin, OpenCode, and OpenCode Go
-use `native`; Codex, Claude, Augment, Factory, JetBrains, Kiro, Windsurf, and similar local-agent providers use `cli`;
-API providers such as Gemini, OpenAI, Groq, DeepSeek, and OpenRouter use `api`; Vertex AI uses `oauth`;
+native-capable providers to the bundled native fetcher where appropriate: Antigravity, Command Code, Cursor, Devin, Grok,
+OpenCode, and OpenCode Go use `native`; Codex, Claude, Augment, Factory, JetBrains, Kiro, Windsurf, and similar local-agent providers use `cli`;
+API providers such as Gemini, OpenAI, Groq, DeepSeek, OpenRouter, and ClinePass use `api`; Vertex AI uses `oauth`;
 Manus, Amp, T3 Chat, and similar browser-session providers use `web`.
 
 The account fields map to the CodexBar CLI account flags:
@@ -170,8 +170,13 @@ Use **Sync Write** to publish the current provider order, enabled state, source,
 keys. Use **Sync Read** in another widget to import that shared list. Synchronization only happens when either button is pressed;
 provider colors, tray-bar choices, and selected provider chips remain local to each widget.
 Compact mode can show either the provider icon or usage bars; usage bars can represent the default provider, the selected
-providers, or all providers, and can be tinted by provider color, remaining-limit gradient (white→yellow→red), or theme text color.
+providers, or all providers, and can be tinted by provider color, remaining-limit gradient (white→yellow→red), pace to reset (white when the budget comfortably outlasts the window, yellow when tight, red when it is projected to run dry before reset — CodexBar's own pace report when it has one, computed locally from the window length and reset time otherwise), or theme text color.
 New widget instances default to all-provider usage bars with the first bar emphasized, theme-text tinting, and no metric text.
+
+Popup usage bars mark the fraction of the limit window remaining with a rounded gap and a pace indicator.
+Under **Appearance → Pace indicator**, choose the color for the indicator's percentage position, the current bar color,
+the provider color, or the theme text color. **Gaps only** hides the indicator and uses a narrower gap.
+The default is **Position color**. Bars without a known window length and reset time remain continuous.
 
 Email addresses are anonymized by default before the helper returns data to QML. Disable **Anonymize emails** only if the
 widget may display full account addresses.
@@ -234,8 +239,9 @@ The inline widget settings configuration wins when both exist. When using `~/.co
 The helper converts `apiKey` into the environment variable expected by the CodexBar CLI when that variable is not already
 set. Supported mappings include `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`,
 `DEEPSEEK_API_KEY`, `DOUBAO_API_KEY`, `MINIMAX_API_KEY`, `MOONSHOT_API_KEY`, `KILO_API_KEY`, `LLMPROXY_API_KEY`,
-`SYNTHETIC_API_KEY`, `VENICE_API_KEY`, `ZAI_API_KEY`, `AZURE_OPENAI_API_KEY`, `ALIBABA_API_KEY`, `GITHUB_TOKEN` for
-Copilot, and `DEVIN_BEARER_TOKEN` for Devin (manual token auth; pair with `DEVIN_ORGANIZATION`).
+`SYNTHETIC_API_KEY`, `VENICE_API_KEY`, `ZAI_API_KEY`, `AZURE_OPENAI_API_KEY`, `ALIBABA_API_KEY`, `CLINE_API_KEY` for
+ClinePass, `GITHUB_TOKEN` for Copilot, and `DEVIN_BEARER_TOKEN` for Devin (manual token auth; pair with `DEVIN_ORGANIZATION`).
+The ClinePass CLI also accepts `CLINEPASS_API_KEY` when it is already present in the plasmoid environment.
 
 The Plasma package ID is `org.slopfire.codexbar-plasmoid`. The release archive ships a prebuilt Linux helper for **x86_64** only; rebuild with `./scripts/build-native-cli.sh` on other architectures.
 
@@ -258,19 +264,24 @@ as `listPriceEstimate` are identified as list-price estimates, not billed charge
 Codex local token totals include cached input tokens and are separate from the
 account's rate-limit percentage.
 When the CLI reports incomplete local history, the card warns that totals may
-omit usage. Manual refresh also bypasses the CLI scan debounce so another bounded
-scan can continue catching up. Local history does not include remote usage unless
-the corresponding logs are present on this computer.
+omit usage. Manual refresh also passes `--refresh` to the CodexBar cost backend to
+bypass its scan debounce, so another bounded scan can continue catching up; native
+backends keep their existing arguments. Local history does not include remote
+usage unless the corresponding logs are present on this computer.
 
 ## Linux Helper
 
-Antigravity, Cursor, Devin, OpenCode, and OpenCode Go need Linux-specific handling. This repository ships a Rust binary,
+Antigravity, Command Code, Cursor, Devin, Grok, OpenCode, and OpenCode Go need Linux-specific handling. This repository ships a Rust binary,
 `codexbar-plasmoid`, bundled inside the plasmoid at `plasmoid/contents/code/codexbar-plasmoid`. It reads browser cookies
 or `~/.codexbar/config.json` manual cookie headers and calls provider APIs directly where possible. Antigravity can either
 probe a running `agy`/IDE language server locally, or use **Native Auth** (browser Google OAuth via
 `codexbar-plasmoid login --provider antigravity`, or tokens from `antigravity-usage login`, stored under
 `~/.config/antigravity-usage`) to call the Cloud Code API without the IDE.
 Devin calls the `app.devin.ai/api/<org>/billing/quota/usage` endpoint with a Bearer token.
+Command Code calls `api.commandcode.ai/alpha/{billing/credits,billing/subscriptions,whoami}` with the API key that
+`cmd login` writes to `~/.commandcode/auth.json` (overrides: `COMMANDCODE_API_KEY`, `COMMANDCODE_AUTH_FILE`,
+`COMMANDCODE_HOME`, `COMMANDCODE_API_BASE`). Its token spend is read from the local session transcripts under
+`~/.commandcode/projects/**/*.jsonl`.
 
 Build and bundle it:
 
@@ -287,7 +298,7 @@ Run it directly:
 plasmoid/contents/code/codexbar-plasmoid usage --format json --json-only --provider cursor --source native
 ```
 
-In widget settings, choose **Linux Helper** as the source for Antigravity, Cursor, Devin, OpenCode, or OpenCode Go. Linux auto mode
+In widget settings, choose **Linux Helper** as the source for Antigravity, Command Code, Cursor, Devin, Grok, OpenCode, or OpenCode Go. Linux auto mode
 already prefers Linux Helper for those providers. For Antigravity without a running IDE, choose **Native Auth** after browser login:
 
 ```sh
@@ -320,6 +331,7 @@ Authentication options:
 - OpenCode Go subscription rate limits from an opencode.ai session (not estimated from local SQLite)
 - OpenCode / OpenCode Go local token spend from `~/.local/share/opencode/*.db` (cost)
 - Devin: `DEVIN_BEARER_TOKEN` (or `DEVIN_AUTHORIZATION`) env var, or `~/.codexbar/config.json` provider `cookie_header`; pair with `DEVIN_ORGANIZATION` (or `DEVIN_ORG`) for the org slug, internal `org_...` ID, or full `app.devin.ai/org/<slug>` URL
+- Command Code: `~/.commandcode/auth.json` from `cmd login` (or `COMMANDCODE_API_KEY`); Command Code token spend from `~/.commandcode/projects/**/*.jsonl` (cost)
 
 Native cookie / auth configuration uses a provider list (local only — do not commit real secrets):
 

@@ -1,8 +1,8 @@
 [package]
 name = "codexbar-plasmoid"
-version = "0.1.8"
+version = "0.1.11"
 edition = "2021"
-description = "Linux-native usage fetcher for Cursor, OpenCode, and OpenCode Go"
+description = "Linux-native usage fetcher for Command Code, Cursor, OpenCode, and OpenCode Go"
 authors = ["slopfire"]
 license = "MIT"
 repository = "https://github.com/slopfire/codexbar-plasmoid.git"
