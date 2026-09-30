@@ -293,8 +293,8 @@ PlasmaComponents3.Frame {
         PlasmaComponents3.Label {
             Layout.fillWidth: true
             visible: !!(card.entry && card.entry.tokenUsage
-                && card.entry.tokenUsage.provenance === "listPriceEstimate")
-            text: i18n("Costs are list-price estimates, not billed charges.")
+                && card.entry.tokenUsage.historyChangedDays > 0)
+            text: i18n("Local history contains less usage than earlier scans on %1 days. Totals use the current logs; earlier daily summaries are preserved.", card.entry && card.entry.tokenUsage ? card.entry.tokenUsage.historyChangedDays : 0)
             color: Kirigami.Theme.disabledTextColor
             font: Kirigami.Theme.smallFont
             wrapMode: Text.WordWrap

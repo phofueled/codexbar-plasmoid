@@ -32,6 +32,7 @@ Control {
 
     readonly property bool showBars: compact.displayMode === "bars"
         || compact.displayMode.indexOf("bars-") === 0
+    readonly property bool percentOnly: compact.displayMode === "percent"
     readonly property string barStyle: {
         if (compact.displayMode === "bars-equal") {
             return "equal";
@@ -57,7 +58,8 @@ Control {
     }
 
     readonly property bool isVertical: compact.width > 0 && compact.height > 0 && compact.width < compact.height
-    readonly property bool showText: compact.showMetricText && compact.width > Kirigami.Units.gridUnit * 3 && !compact.isVertical
+    readonly property bool showText: compact.percentOnly
+        || (compact.showMetricText && compact.width > Kirigami.Units.gridUnit * 3 && !compact.isVertical)
     readonly property real rowSpacing: compact.isVertical ? Kirigami.Units.smallSpacing : Kirigami.Units.largeSpacing
 
     readonly property real iconSize: compact.height > 0
@@ -88,11 +90,13 @@ Control {
         return total;
     }
 
-    readonly property real visualWidth: compact.showBars
+    readonly property real visualWidth: compact.percentOnly ? 0 : compact.showBars
         ? Math.max(compact.iconSize, compact.barGroupsTotalWidth())
         : compact.iconSize
 
-    implicitWidth: Math.max(
+    implicitWidth: compact.percentOnly
+        ? valueLabel.implicitWidth + leftPadding + rightPadding
+        : Math.max(
         compact.showMetricText ? Kirigami.Units.gridUnit * 4.5 : 0,
         compact.visualWidth + leftPadding + rightPadding
             + (compact.showText ? compact.rowSpacing + valueLabel.implicitWidth + compact.rowSpacing : 0))
@@ -103,7 +107,8 @@ Control {
         ? compact.rowSpacing + valueLabel.implicitWidth + compact.rowSpacing
         : 0
     implicitHeight: Math.max(Kirigami.Units.iconSizes.small, contentItem.implicitHeight) + topPadding + bottomPadding
-    leftPadding: compact.showText ? Kirigami.Units.largeSpacing : Math.round(Kirigami.Units.smallSpacing / 2)
+    leftPadding: compact.percentOnly ? Kirigami.Units.smallSpacing
+        : compact.showText ? Kirigami.Units.largeSpacing : Math.round(Kirigami.Units.smallSpacing / 2)
     rightPadding: leftPadding
     topPadding: Math.round(Kirigami.Units.smallSpacing / 2)
     bottomPadding: topPadding
@@ -115,12 +120,13 @@ Control {
 
         Item {
             id: visualSlot
+            visible: !compact.percentOnly
             implicitWidth: compact.visualWidth
             implicitHeight: compact.iconSize
             width: implicitWidth
             height: implicitHeight
-            Layout.preferredWidth: implicitWidth
-            Layout.minimumWidth: implicitWidth
+            Layout.preferredWidth: visible ? implicitWidth : 0
+            Layout.minimumWidth: visible ? implicitWidth : 0
             Layout.preferredHeight: implicitHeight
             Layout.minimumHeight: 0
             Layout.alignment: Qt.AlignVCenter
@@ -175,7 +181,7 @@ Control {
             PlasmaComponents3.Label {
                 id: valueLabel
                 text: compact.loading && !compact.entry ? i18n("…") : compact.valueText
-                font.bold: true
+                font.bold: !compact.percentOnly
                 horizontalAlignment: Text.AlignLeft
                 elide: Text.ElideRight
             }
@@ -186,7 +192,7 @@ Control {
                 color: Kirigami.Theme.disabledTextColor
                 font: Kirigami.Theme.smallFont
                 elide: Text.ElideRight
-                visible: compact.width > Kirigami.Units.gridUnit * 6 && compact.height >= 40
+                visible: !compact.percentOnly && compact.width > Kirigami.Units.gridUnit * 6 && compact.height >= 40
             }
         }
     }

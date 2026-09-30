@@ -51,6 +51,7 @@ Kirigami.ScrollablePage {
                 valueRole: "value"
                 model: [
                     { text: i18n("Provider icon"), value: "icon" },
+                    { text: i18n("Percentage only"), value: "percent" },
                     { text: i18n("Usage bars — first larger"), value: "bars-first" },
                     { text: i18n("Usage bars — equal"), value: "bars-equal" },
                     { text: i18n("Usage bars — descending"), value: "bars-descending" },

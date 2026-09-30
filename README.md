@@ -35,9 +35,9 @@ The install script builds the bundled Linux helper, removes older package IDs if
 From a release archive (`.plasmoid`):
 
 ```sh
-kpackagetool6 --type Plasma/Applet --install codexbar-plasmoid-v0.1.11-plasma6.plasmoid
+kpackagetool6 --type Plasma/Applet --install codexbar-plasmoid-v0.1.11+fork.1-plasma6.plasmoid
 # or upgrade:
-kpackagetool6 --type Plasma/Applet --upgrade codexbar-plasmoid-v0.1.11-plasma6.plasmoid
+kpackagetool6 --type Plasma/Applet --upgrade codexbar-plasmoid-v0.1.11+fork.1-plasma6.plasmoid
 ```
 
 Then add **CodexBar** from the Plasma widget explorer (System Information).
@@ -263,6 +263,10 @@ Usage bars show the percentage **remaining**. Local cost totals marked by the CL
 as `listPriceEstimate` are identified as list-price estimates, not billed charges.
 Codex local token totals include cached input tokens and are separate from the
 account's rate-limit percentage.
+
+The graph in this fork shows daily tokens. Quotas refresh every 150 seconds by default; local cost/history scans reuse a shared cache for one hour. Manual refresh bypasses both caches.
+
+Completed Codex scans preserve daily quantities under `$XDG_STATE_HOME/codexbar-plasmoid/cost-history` (normally `~/.local/state/codexbar-plasmoid/cost-history`), scoped to `CODEX_HOME`. If current logs contain fewer tokens than earlier observations within the displayed window, the card warns. Historical observations never inflate current totals: differences can reflect deleted transcripts or parser corrections. Only daily token/cost quantities and observation dates are retained, not transcripts or account credentials.
 When the CLI reports incomplete local history, the card warns that totals may
 omit usage. Manual refresh also passes `--refresh` to the CodexBar cost backend to
 bypass its scan debounce, so another bounded scan can continue catching up; native

@@ -108,6 +108,13 @@ else
 fi
 
 # --- package metadata ---
+section "daily history regression tests"
+if node --test tests/cost-history.test.mjs >/tmp/agent-check-history.out 2>&1; then
+  ok "history retention, loss detection, scope isolation, and rolling window"
+else
+  bad "history regression tests ($(tail -c 300 /tmp/agent-check-history.out | tr '\n' ' '))"
+fi
+
 section "package metadata"
 if [[ -f plasmoid/metadata.json ]]; then
   if command -v jq >/dev/null 2>&1; then
@@ -155,9 +162,6 @@ if [[ "$use_mock" -eq 1 ]] && command -v node >/dev/null 2>&1; then
               const j=JSON.parse(s);
               if(!j || j.ok!==true) process.exit(2);
               if(!Array.isArray(j.entries) || j.entries.length<1) process.exit(3);
-              const codex = j.entries.find(e=>e.provider === "codex");
-              if(codex?.tokenUsage?.provenance !== "listPriceEstimate") process.exit(5);
-              if(codex?.tokenUsage?.historyCoverageIsEstablished !== false) process.exit(6);
               const rowOf = (p, id) => ((j.entries.find(e=>e.provider===p)||{}).rows||[]).find(r=>r.id===id);
               const cxPrimary = rowOf("codex", "primary");
               const cxSecondary = rowOf("codex", "secondary");

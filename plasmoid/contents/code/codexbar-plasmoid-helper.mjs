@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { trackCodexCostHistory } from "./codexbar-cost-history.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 // KDE's plasmoid process inherits the user's session env from systemd --user
@@ -229,11 +230,11 @@ async function main() {
       cost = costResult.items;
       costError = costResult.costError;
     }
-    const snapshot = normalizeSnapshot(usage, cost, costError);
+    const snapshot = withCachedLimitRows(normalizeSnapshot(usage, cost, costError));
     snapshot.cliUpdate = updateResult;
     process.stdout.write(`${JSON.stringify(snapshot)}\n`);
   } catch (error) {
-    const snapshot = errorSnapshot(error);
+    const snapshot = withCachedLimitRows(errorSnapshot(error));
     snapshot.cliUpdate = updateResult;
     process.stdout.write(`${JSON.stringify(snapshot)}\n`);
     process.exitCode = 0;
@@ -619,7 +620,8 @@ function fetchCostWithCommand(command, providerId, backend) {
     }, () => {
       try {
         const extraEnv = backend === "codexbar" ? { SWIFT_TESTING: "1" } : {};
-        return runJSON(command, runArgs, providerId, "", "", extraEnv);
+        const result = runJSON(command, runArgs, providerId, "", "", extraEnv);
+        return backend === "codexbar" ? trackCodexCostHistory(asArray(result)) : result;
       } catch (error) {
         return [{
           provider: "cost",
@@ -906,6 +908,135 @@ function normalizeSnapshot(usagePayload, costPayload, costError = null) {
   };
 }
 
+// Keep successful rate-limit windows across helper and Plasma restarts. A
+// cost/credits-only CLI response is not evidence that the user's limit
+// disappeared, especially when the network is unavailable.
+function withCachedLimitRows(snapshot) {
+  const cachePath = limitCachePath();
+  const cached = readLimitCache(cachePath);
+  const remembered = cached.entries.slice();
+  let updatedCache = false;
+
+  const entries = (snapshot.entries || []).map((entry) => {
+    if (!entry) return entry;
+    if (!entry.error && hasLimitRows(entry.rows)) {
+      const saved = {
+        id: entry.id,
+        provider: entry.provider,
+        account: entry.account || null,
+        source: entry.source || null,
+        rows: entry.rows,
+        updatedAt: entry.updatedAt,
+      };
+      const index = remembered.findIndex((candidate) => candidate.id === saved.id);
+      if (index >= 0) remembered[index] = saved;
+      else remembered.push(saved);
+      updatedCache = true;
+      return entry;
+    }
+
+    const previous = matchCachedLimitEntry(entry, remembered);
+    return previous ? { ...entry, rows: previous.rows, updatedAt: previous.updatedAt, staleUsage: true } : entry;
+  });
+
+  if (updatedCache) writeLimitCache(cachePath, remembered);
+  if (entries.length > 0) {
+    return {
+      ...snapshot,
+      entries,
+      generatedAt: entries.every((entry) => entry && entry.staleUsage)
+        ? cached.savedAt || snapshot.generatedAt
+        : snapshot.generatedAt,
+    };
+  }
+  if (remembered.length === 0) return snapshot;
+
+  const restored = remembered.map((entry) => ({
+    ...entry,
+    organization: null,
+    plan: null,
+    siteUrl: null,
+    version: null,
+    status: null,
+    error: null,
+    creditsRemaining: null,
+    limitResetCredits: null,
+    codeReviewRemainingPercent: null,
+    tokenUsage: null,
+    dailyUsage: [],
+    staleUsage: true,
+  }));
+  return {
+    ...snapshot,
+    ok: true,
+    entries: restored,
+    generatedAt: cached.savedAt || snapshot.generatedAt,
+    refreshError: snapshot.error || "Live usage unavailable; showing cached limits",
+  };
+}
+
+function hasLimitRows(rows) {
+  return Array.isArray(rows) && rows.some((row) =>
+    row && typeof row.percentLeft === "number" && Number.isFinite(row.percentLeft));
+}
+
+function matchCachedLimitEntry(entry, entries) {
+  const exact = entries.find((candidate) => candidate.id === entry.id);
+  if (exact) return exact;
+  const providerMatches = entries.filter((candidate) => candidate.provider === entry.provider);
+  if (entry.account) {
+    const accountMatches = providerMatches.filter((candidate) => candidate.account === entry.account);
+    if (accountMatches.length === 1) return accountMatches[0];
+    return null;
+  }
+  const sourceMatches = providerMatches.filter((candidate) => candidate.source === entry.source);
+  if (sourceMatches.length === 1) return sourceMatches[0];
+  return providerMatches.length === 1 ? providerMatches[0] : null;
+}
+
+function limitCachePath() {
+  const configs = effectiveProviderConfigs().map((config) => ({
+    provider: config.provider,
+    source: config.source,
+    account: config.account,
+    accountIndex: config.accountIndex,
+    allAccounts: config.allAccounts,
+    apiKeyHash: hashSecret(config.apiKey),
+  }));
+  const identity = { provider, source, configs, account: args.account, accountIndex: args.accountIndex, allAccounts: args.allAccounts };
+  const hash = crypto.createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+  const cacheHome = clean(process.env.XDG_CACHE_HOME) || path.join(os.homedir(), ".cache");
+  return path.join(cacheHome, "codexbar-plasmoid", `last-usage-limits-${hash}.json`);
+}
+
+function readLimitCache(cachePath) {
+  try {
+    if (fs.statSync(cachePath).size > 256 * 1024) return { entries: [] };
+    const parsed = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+    if (parsed.version !== 1 || !Array.isArray(parsed.entries)) return { entries: [] };
+    return {
+      savedAt: parsed.savedAt,
+      entries: parsed.entries.filter((entry) =>
+        entry && typeof entry.id === "string" && typeof entry.provider === "string" && hasLimitRows(entry.rows)),
+    };
+  } catch {
+    return { entries: [] };
+  }
+}
+
+function writeLimitCache(cachePath, entries) {
+  const temporaryPath = `${cachePath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(temporaryPath, JSON.stringify({ version: 1, savedAt: new Date().toISOString(), entries }), { mode: 0o600 });
+    fs.renameSync(temporaryPath, cachePath);
+  } catch {
+    // A read-only cache directory must not hide a successful live result.
+  } finally {
+    try { fs.unlinkSync(temporaryPath); } catch {}
+  }
+}
+
 function costEnabledProviders() {
   const configs = effectiveProviderConfigs();
   if (configs.length === 0) {
@@ -978,6 +1109,9 @@ function normalizeProvider(item, cost) {
   }
   if (creditsRemaining === null) {
     creditsRemaining = parseBalanceFromDescription(usage.loginMethod || identity.loginMethod);
+  }
+  if (!showCredits) {
+    creditsRemaining = null;
   }
 
   const itemSiteUrl = typeof item.siteUrl === "string" ? item.siteUrl : null;
@@ -1067,6 +1201,8 @@ function buildTokenUsage(cost, usage) {
         provenance: clean(cost.provenance || cost.totals?.provenance) || null,
         historyCoverageIsEstablished: typeof cost.historyCoverageIsEstablished === "boolean"
           ? cost.historyCoverageIsEstablished : null,
+        historyChangedDays: integerOrNull(cost.historyChangedDays) || 0,
+        previouslyObservedTokensAbsent: integerOrNull(cost.previouslyObservedTokensAbsent) || 0,
         currencyCode: cost.currencyCode || "USD",
         sessionLabel: cost.sessionLabel || "Today",
         last30DaysLabel: cost.last30DaysLabel || "30d",

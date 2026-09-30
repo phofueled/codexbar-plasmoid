@@ -547,13 +547,6 @@ PlasmoidItem {
             if (lowest !== null) {
                 return percent(lowest);
             }
-            if (entry.provider === "codex" && ["lowest", "session", "weekly"].indexOf(metric) >= 0) return "—";
-            if (entry.creditsRemaining !== null) {
-                return Number(entry.creditsRemaining).toLocaleString(Qt.locale(), "f", 1);
-            }
-            if (entry.tokenUsage) {
-                return money(entry.tokenUsage.sessionCostUSD, entry.tokenUsage.currencyCode);
-            }
             return "—";
         }
 
@@ -844,7 +837,9 @@ PlasmoidItem {
             }
             try {
                 const parsed = JSON.parse(output);
-                root.lastError = parsed.ok === false ? (parsed.error || i18n("CodexBar refresh failed")) : "";
+                root.lastError = parsed.ok === false
+                    ? (parsed.error || i18n("CodexBar refresh failed"))
+                    : (parsed.refreshError || "");
                 if (parsed.ok !== false) {
                     root.snapshot = codexBar.retainLastSuccessfulResults(parsed);
                     codexBar.updateCompactBarCatalog(root.snapshot.entries || []);
@@ -1468,6 +1463,9 @@ PlasmoidItem {
     function tooltipText() {
         if (loading) {
             return i18n("Refreshing");
+        }
+        if (primaryEntry && primaryEntry.staleUsage) {
+            return i18n("Cached %1 · %2", codexBar.compactValue(primaryEntry), codexBar.relativeTime(primaryEntry.updatedAt));
         }
         if (lastError.length > 0) {
             return lastError;
